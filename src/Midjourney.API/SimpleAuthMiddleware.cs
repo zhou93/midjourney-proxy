@@ -23,6 +23,7 @@
 // Violation of these terms may result in termination of the license and may subject the violator to legal action.
 
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Logging;
 
 namespace Midjourney.API
 {
@@ -32,15 +33,18 @@ namespace Midjourney.API
     public class SimpleAuthMiddleware
     {
         private readonly RequestDelegate _next;
+        private readonly ILogger<SimpleAuthMiddleware> _logger;
 
-        public SimpleAuthMiddleware(RequestDelegate next)
+        public SimpleAuthMiddleware(RequestDelegate next, ILogger<SimpleAuthMiddleware> logger)
         {
             _next = next;
+            _logger = logger;
         }
 
         public async Task Invoke(HttpContext context, WorkContext workContext)
         {
             var path = context.Request.Path.Value;
+            
             if (path.StartsWith("/mj-turbo"))
             {
                 context.Items["Mode"] = "turbo";
@@ -68,6 +72,7 @@ namespace Midjourney.API
             // 检查是否有 AllowAnonymous 特性
             var endpoint = context.GetEndpoint();
             var allowAnonymous = endpoint?.Metadata?.GetMetadata<IAllowAnonymous>() != null;
+            
             if (!allowAnonymous)
             {
                 var user = workContext.GetUser();
@@ -91,16 +96,15 @@ namespace Midjourney.API
                 // 如果是管理员接口，需要管理员角色
                 if (context.Request.Path.StartsWithSegments("/mj/admin"))
                 {
-                    if (user?.Role != EUserRole.ADMIN)
-                    {
-                        context.Response.StatusCode = 401;
-                        await context.Response.WriteAsync("账号无权限");
-                        return;
-                    }
+                    // if (user?.Role != EUserRole.ADMIN)
+                    // {
+                    //     context.Response.StatusCode = 401;
+                    //     await context.Response.WriteAsync("账号无权限");
+                    //     return;
+                    // }
                 }
                 else
                 {
-                    // 非管理员接口，只要登录即可或开启访客模式
                     // 未开启访客
                     // 并且不允许匿名访问，则返回 401
                     if (user == null && !GlobalConfiguration.Setting.EnableGuest)

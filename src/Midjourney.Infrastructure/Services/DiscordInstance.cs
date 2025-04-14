@@ -1116,6 +1116,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns></returns>
         public async Task<Message> RemixAsync(TaskInfo info, TaskAction action, string messageId, string modal, string customId, string prompt, string nonce, EBotType botType)
         {
+            // 确保使用正确的 prompt
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                prompt = info.PromptEn;
+            }
             prompt = GetPrompt(prompt, info);
 
             string paramsStr = ReplaceInteractionParams(_paramsMap["remix"], nonce, botType)

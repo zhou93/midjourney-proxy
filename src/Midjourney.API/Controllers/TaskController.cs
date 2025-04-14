@@ -27,7 +27,10 @@ using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
+using Midjourney.Infrastructure.StandardTable;
 using System.Net;
+using MongoDB.Driver;
+using MongoDB.Driver.Linq;
 
 namespace Midjourney.API.Controllers
 {
@@ -165,6 +168,113 @@ namespace Midjourney.API.Controllers
         {
             var data = DbHelper.Instance.TaskStore.Where(c => true, t => t.SubmitTime, false, 100).ToList();
             return Ok(data);
+        }
+
+        /// <summary>
+        /// 分页查询当前用户的任务（兼容TableList格式）
+        /// </summary>
+        /// <returns>当前用户的任务</returns>
+        [HttpPost("tasks")]
+        public ActionResult<StandardTableResult<TaskInfo>> Tasks([FromBody] StandardTableParam<TaskInfo> request)
+        {
+            var page = request.Pagination;
+            if (page.PageSize > 100)
+            {
+                page.PageSize = 100;
+            }
+
+            // 获取当前用户
+            var user = _workContext.GetUser();
+            var userId = user?.Id;
+
+            var param = request.Search;
+
+            // 这里使用原生查询，因为查询条件比较复杂
+            var setting = GlobalConfiguration.Setting;
+            if (setting.DatabaseType == DatabaseType.MongoDB)
+            {
+                var coll = MongoHelper.GetCollection<TaskInfo>();
+                var query = coll.AsQueryable()
+                    .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId)
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.Id), c => c.Id == param.Id || c.State == param.Id)
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
+                    .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
+                    .WhereIf(param.Action.HasValue, c => c.Action == param.Action.Value)
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+
+                var count = (int)query.Count();
+
+                var list = query
+                    .OrderByDescending(c => c.SubmitTime)
+                    .Skip((page.Current - 1) * page.PageSize)
+                    .Take(page.PageSize)
+                    .ToList();
+
+                var data = list.ToTableResult(request.Pagination.Current, request.Pagination.PageSize, count);
+
+                return Ok(data);
+            }
+            else if (setting.DatabaseType == DatabaseType.LiteDB)
+            {
+                var query = LiteDBHelper.TaskStore.GetCollection().Query()
+                    .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId) // 只查询当前用户的任务
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.Id), c => c.Id == param.Id || c.State == param.Id)
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
+                    .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
+                    .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+
+                var count = query.Count();
+                var list = query
+                    .OrderByDescending(c => c.SubmitTime)
+                    .Skip((page.Current - 1) * page.PageSize)
+                    .Limit(page.PageSize)
+                    .ToList();
+
+                var data = list.ToTableResult(request.Pagination.Current, request.Pagination.PageSize, count);
+
+                return Ok(data);
+            }
+            else
+            {
+                var freeSql = FreeSqlHelper.FreeSql;
+                if (freeSql != null)
+                {
+                    var query = freeSql.Select<TaskInfo>()
+                        .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId) // 只查询当前用户的任务
+                        .WhereIf(!string.IsNullOrWhiteSpace(param.Id), c => c.Id == param.Id || c.State == param.Id)
+                        .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
+                        .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
+                        .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
+                        .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
+                        .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+
+                    var count = (int)query.Count();
+
+                    var list = query
+                        .OrderByDescending(c => c.SubmitTime)
+                        .Skip((page.Current - 1) * page.PageSize)
+                        .Take(page.PageSize)
+                        .ToList();
+
+                    var data = list.ToTableResult(request.Pagination.Current, request.Pagination.PageSize, count);
+
+                    return Ok(data);
+                }
+            }
+
+            return Ok(new StandardTableResult<TaskInfo>()
+            {
+                List = new List<TaskInfo>(),
+                Pagination = new StandardTablePagination()
+                {
+                    Current = page.Current,
+                    PageSize = page.PageSize,
+                    Total = 0
+                }
+            });
         }
 
         /// <summary>

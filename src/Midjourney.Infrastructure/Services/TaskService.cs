@@ -688,6 +688,18 @@ namespace Midjourney.Infrastructure.Services
                 task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_ID, targetTask.MessageId);
                 task.SetProperty(Constants.TASK_PROPERTY_FLAGS, messageFlags);
 
+                // 设置任务的提示信息 = 父级任务的提示信息
+                task.Prompt = targetTask.Prompt;
+                // 上次的最终词作为变化的 prompt
+                // 移除速度模式参数
+                task.PromptEn = targetTask.GetProperty<string>(Constants.TASK_PROPERTY_FINAL_PROMPT, default)?.Replace("--fast", "")?.Replace("--relax", "")?.Replace("--turbo", "")?.Trim();
+
+                // 但是如果父级任务是 blend 任务，可能 prompt 为空
+                if (string.IsNullOrWhiteSpace(task.PromptEn))
+                {
+                    task.PromptEn = targetTask.PromptEn;
+                }
+
                 if (discordInstance.Account.RemixAutoSubmit)
                 {
                     // 如果开启了 remix 自动提交
@@ -703,7 +715,7 @@ namespace Midjourney.Infrastructure.Services
                         {
                             TaskId = task.Id,
                             NotifyHook = submitAction.NotifyHook,
-                            Prompt = targetTask.PromptEn,
+                            Prompt = task.PromptEn,
                             State = submitAction.State
                         });
                     }
@@ -717,6 +729,8 @@ namespace Midjourney.Infrastructure.Services
                     {
                         // 如果是 REMIX 任务，则设置任务状态为 modal
                         task.Status = TaskStatus.MODAL;
+                        task.SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn);
+                        task.SetProperty(Constants.TASK_PROPERTY_REMIX, true);
                         _taskStoreService.Save(task);
 
                         // 状态码为 21

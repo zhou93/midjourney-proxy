@@ -47,14 +47,32 @@ namespace Midjourney.Infrastructure.LoadBalancer
             // 优先选择空闲的实例
             var idleCandidates = instances
                 .Where(c => c.Account.CoreSize - c.GetRunningFutures().Count > 0)
-                .GroupBy(c => c.Account.CoreSize - c.GetRunningFutures().Count)
-                .OrderByDescending(g => g.Key)
-                .FirstOrDefault();
+                .ToList();
 
-            if (idleCandidates != null)
+            if (idleCandidates.Any())
             {
-                // 随机选择一个空闲实例
-                return idleCandidates.ElementAt(random.Next(idleCandidates.Count()));
+                // 按空闲程度分组
+                var idleGroups = idleCandidates
+                    .GroupBy(c => c.Account.CoreSize - c.GetRunningFutures().Count)
+                    .OrderByDescending(g => g.Key)
+                    .ToList();
+
+                // 获取空闲程度最高的组
+                var mostIdleGroup = idleGroups.FirstOrDefault();
+                if (mostIdleGroup != null)
+                {
+                    // 在空闲程度最高的组中，选择队列任务数最少的实例
+                    var minQueueInstances = mostIdleGroup
+                        .GroupBy(c => c.GetQueueTasks().Count)
+                        .OrderBy(g => g.Key)
+                        .FirstOrDefault();
+
+                    if (minQueueInstances != null)
+                    {
+                        // 随机选择一个实例
+                        return minQueueInstances.ElementAt(random.Next(minQueueInstances.Count()));
+                    }
+                }
             }
 
             // 如果没有空闲的实例，则选择 -> (当前队列数 + 执行中的数量) / 核心数, 最小的实例

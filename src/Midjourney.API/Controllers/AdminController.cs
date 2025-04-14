@@ -77,13 +77,13 @@ namespace Midjourney.API.Controllers
             // 如果不是管理员，并且是演示模式时，则是为匿名用户
             var user = workContext.GetUser();
 
-            _isAnonymous = user?.Role != EUserRole.ADMIN;
+            _isAnonymous = user?.Role != EUserRole.ADMIN && user?.Role != EUserRole.USER;
             _properties = GlobalConfiguration.Setting;
 
             // 普通用户，无法登录管理后台，演示模式除外
             // 判断当前用户如果是普通用户
             // 并且不是匿名控制器时
-            if (user?.Role != EUserRole.ADMIN)
+            if (user?.Role != EUserRole.ADMIN && user?.Role != EUserRole.USER)
             {
                 var endpoint = context.HttpContext.GetEndpoint();
                 var allowAnonymous = endpoint?.Metadata?.GetMetadata<IAllowAnonymous>() != null;
@@ -166,6 +166,12 @@ namespace Midjourney.API.Controllers
             {
                 throw new LogicException("邮箱格式错误");
             }
+            
+            // 验证邮箱后缀是否为 @yottastudios.com
+            if (!mail.EndsWith("@yottastudios.com", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new LogicException("只允许使用 @yottastudios.com 后缀的邮箱注册");
+            }
 
             // 判断是否开放注册
             // 如果没有配置邮件服务，则不允许注册
@@ -178,10 +184,10 @@ namespace Midjourney.API.Controllers
             // 每个IP每天只能注册一个账号
             var ip = _workContext.GetIp();
             var key = $"register:{ip}";
-            if (_memoryCache.TryGetValue(key, out _))
-            {
-                throw new LogicException("注册太频繁");
-            }
+            // if (_memoryCache.TryGetValue(key, out _))
+            // {
+            //     throw new LogicException("注册太频繁");
+            // }
 
             // 验证用户是否存在
             var user = DbHelper.Instance.UserStore.Single(u => u.Email == mail);
@@ -263,8 +269,8 @@ namespace Midjourney.API.Controllers
                 throw new LogicException("用户已被禁用");
             }
 
-            // 非演示模式，普通用户和访客无法登录后台
-            if (user.Role != EUserRole.ADMIN && GlobalConfiguration.IsDemoMode != true)
+            // 非演示模式，访客无法登录后台
+            if (user.Role != EUserRole.ADMIN && user.Role != EUserRole.USER && GlobalConfiguration.IsDemoMode != true)
             {
                 throw new LogicException("用户无权限");
             }
@@ -1239,6 +1245,10 @@ namespace Midjourney.API.Controllers
             }
 
             var param = request.Search;
+            var currentUser = _workContext.GetUser();
+
+            // 非管理员只能查看自己的任务
+            var userId = currentUser?.Role != EUserRole.ADMIN ? currentUser?.Id : null;
 
             // 这里使用原生查询，因为查询条件比较复杂
             var setting = GlobalConfiguration.Setting;
@@ -1251,7 +1261,8 @@ namespace Midjourney.API.Controllers
                     .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                     .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
-                    .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+                    .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description))
+                    .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId);
 
                 var count = query.Count();
                 var list = query
@@ -1272,7 +1283,8 @@ namespace Midjourney.API.Controllers
                 .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                 .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
                 .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
-                .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+                .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description))
+                .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId);
 
                 var count = query.Count();
                 var list = query
@@ -1296,7 +1308,8 @@ namespace Midjourney.API.Controllers
                         .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                         .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
                         .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
-                        .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
+                        .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description))
+                        .WhereIf(!string.IsNullOrWhiteSpace(userId), c => c.UserId == userId);
 
                     var count = (int)query.Count();
 
@@ -1311,7 +1324,6 @@ namespace Midjourney.API.Controllers
                     return Ok(data);
                 }
             }
-
 
             return Ok(new StandardTableResult<TaskInfo>()
             {
@@ -2028,6 +2040,99 @@ namespace Midjourney.API.Controllers
             var success = DbHelper.Verify();
 
             return success ? Result.Ok() : Result.Fail("连接失败");
+        }
+
+        /// <summary>
+        /// 获取每日绘图统计数据
+        /// </summary>
+        /// <param name="days">要查询的天数,默认30天</param>
+        /// <returns>每日统计数据</returns>
+        [HttpGet("daily-stats")]
+        public ActionResult GetDailyStats([FromQuery] int days = 30)
+        {
+            // 演示模式限制查询天数
+            if (_isAnonymous && days > 7)
+            {
+                days = 7;
+            }
+
+            var endDate = DateTime.Now.Date;
+            var startDate = endDate.AddDays(-days);
+            
+            var setting = GlobalConfiguration.Setting;
+            var stats = new List<object>();
+            
+            if (setting.DatabaseType == DatabaseType.MongoDB)
+            {
+                var tasks = MongoHelper.GetCollection<TaskInfo>().AsQueryable()
+                    .Where(t => t.SubmitTime != null && 
+                        DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime >= startDate && 
+                        DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime <= endDate)
+                    .ToList();
+                    
+                stats = tasks.GroupBy(t => DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime.Date)
+                    .Select(g => new { 
+                        date = g.Key.ToString("yyyy-MM-dd"),
+                        count = g.Count()
+                    })
+                    .OrderBy(x => x.date)
+                    .ToList<object>();
+            }
+            else if (setting.DatabaseType == DatabaseType.LiteDB)
+            {
+                var tasks = LiteDBHelper.TaskStore.GetCollection().Query()
+                    .Where(t => t.SubmitTime != null && 
+                        DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime >= startDate && 
+                        DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime <= endDate)
+                    .ToList();
+                    
+                stats = tasks.GroupBy(t => DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime.Date)
+                    .Select(g => new {
+                        date = g.Key.ToString("yyyy-MM-dd"),
+                        count = g.Count()
+                    })
+                    .OrderBy(x => x.date)
+                    .ToList<object>();
+            }
+            else
+            {
+                var freeSql = FreeSqlHelper.FreeSql;
+                if (freeSql != null)
+                {
+                    stats = freeSql.Select<TaskInfo>()
+                        .Where(t => t.SubmitTime != null && 
+                            DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime >= startDate && 
+                            DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime <= endDate)
+                        .GroupBy(t => DateTimeOffset.FromUnixTimeMilliseconds(t.SubmitTime.Value).DateTime.Date)
+                        .Select(g => new {
+                            date = g.Key.ToString("yyyy-MM-dd"),
+                            count = g.Count()
+                        })
+                        .OrderBy(x => x.date)
+                        .ToList<object>();
+                }
+            }
+
+            // 填充没有数据的日期为0
+            var allDates = Enumerable.Range(0, days)
+                .Select(offset => startDate.AddDays(offset))
+                .Select(date => new {
+                    date = date.ToString("yyyy-MM-dd"),
+                    count = 0
+                })
+                .ToList();
+
+            var result = allDates.GroupJoin(
+                stats,
+                a => a.date,
+                s => (s as dynamic).date,
+                (a, s) => new {
+                    date = a.date,
+                    count = s.Any() ? (s.First() as dynamic).count : 0
+                })
+                .ToList<object>();
+
+            return Ok(result);
         }
     }
 }

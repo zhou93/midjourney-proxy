@@ -669,7 +669,7 @@ namespace Midjourney.Infrastructure
 
                     case GatewayOpCode.Dispatch:
                         {
-                            _logger.Information("Received Dispatch {@0}, {@1}", type, Account.ChannelId);
+                            // _logger.Information("Received Dispatch {@0}, {@1}", type, Account.ChannelId);
                             HandleDispatch(payload);
                         }
                         break;

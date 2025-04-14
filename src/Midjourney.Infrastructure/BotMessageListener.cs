@@ -262,7 +262,7 @@ namespace Midjourney.Infrastructure
         {
             try
             {
-                _logger.Debug("用户收到消息 {@0}", raw.ToString());
+                // _logger.Debug("用户收到消息 {@0}", raw.ToString());
 
                 if (!raw.TryGetProperty("t", out JsonElement messageTypeElement))
                 {
@@ -793,7 +793,7 @@ namespace Midjourney.Infrastructure
                 {
                     var id = idElement.GetString();
 
-                    _logger.Information($"用户消息, {messageType}, {Account.GetDisplay()} - id: {id}, mid: {metaId}, {authorName}, content: {contentStr}");
+                    // _logger.Information($"用户消息, {messageType}, {Account.GetDisplay()} - id: {id}, mid: {metaId}, {authorName}, content: {contentStr}");
 
                     var isEm = data.TryGetProperty("embeds", out var em);
                     if ((messageType == MessageType.CREATE || messageType == MessageType.UPDATE) && isEm)
