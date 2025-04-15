@@ -546,8 +546,10 @@ namespace Midjourney.Infrastructure.Services
 
                 // 状态码为 21
                 // 重绘、自定义变焦始终 remix 为true
+                // 如果task.PromptEn为空，则使用targetTask.PromptEn
+                string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
                 return SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
-                    .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn)
+                    .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
                     .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
             }
             // describe 全部重新生成绘图
@@ -629,8 +631,10 @@ namespace Midjourney.Infrastructure.Services
 
                 // 状态码为 21
                 // 重绘、自定义变焦始终 remix 为true
+                // 如果task.PromptEn为空，则使用targetTask.PromptEn
+                string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
                 return SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
-                    .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn)
+                    .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
                     .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
             }
             // prompt shorten -> 生图
@@ -672,8 +676,10 @@ namespace Midjourney.Infrastructure.Services
 
                         // 状态码为 21
                         // 重绘、自定义变焦始终 remix 为true
+                        // 如果task.PromptEn为空，则使用targetTask.PromptEn
+                        string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
                         return SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
-                            .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn)
+                            .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
                             .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
                     }
                 }
@@ -734,8 +740,10 @@ namespace Midjourney.Infrastructure.Services
                         _taskStoreService.Save(task);
 
                         // 状态码为 21
+                        // 如果task.PromptEn为空，则使用targetTask.PromptEn
+                        string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
                         return SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
-                            .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn)
+                            .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
                             .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
                     }
                 }
