@@ -34,19 +34,19 @@ namespace Midjourney.Infrastructure.Dto
         /// <summary>
         /// 账号（用于自动登录）
         /// </summary>
-        [Required]
+        /// [Required]
         public string LoginAccount { get; set; }
 
         /// <summary>
         /// 密码（用于自动登录）
         /// </summary>
-        [Required]
+        /// [Required]
         public string LoginPassword { get; set; }
 
         /// <summary>
         /// 2FA 密钥（用于自动登录）
         /// </summary>
-        [Required]
+        /// [Required]
         public string Login2fa { get; set; }
 
         /// <summary>
