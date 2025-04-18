@@ -22,6 +22,12 @@
 // invasion of privacy, or any other unlawful purposes is strictly prohibited.
 // Violation of these terms may result in termination of the license and may subject the violator to legal action.
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Services;
@@ -29,13 +35,6 @@ using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Util;
 using Newtonsoft.Json.Linq;
 using Serilog;
-using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Net;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.RegularExpressions;
-
 using ILogger = Serilog.ILogger;
 
 namespace Midjourney.Infrastructure.LoadBalancer
@@ -46,7 +45,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
     /// </summary>
     public class DiscordInstance
     {
-
         private readonly object _lockAccount = new object();
 
         private readonly ILogger _logger = Log.Logger;
@@ -54,8 +52,16 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly ITaskStoreService _taskStoreService;
         private readonly INotifyService _notifyService;
 
-        private readonly List<TaskInfo> _runningTasks = [];
+        /// <summary>
+        /// 正在运行的任务列表 key：任务ID，value：任务信息
+        /// </summary>
+        private readonly ConcurrentDictionary<string, TaskInfo> _runningTasks = [];
+
+        /// <summary>
+        /// 任务Future映射 key：任务ID，value：作业 Action
+        /// </summary>
         private readonly ConcurrentDictionary<string, Task> _taskFutureMap = [];
+
         private readonly AsyncParallelLock _semaphoreSlimLock;
 
         private readonly Task _longTask;
@@ -220,7 +226,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// 获取正在运行的任务列表。
         /// </summary>
         /// <returns>正在运行的任务列表</returns>
-        public List<TaskInfo> GetRunningTasks() => _runningTasks;
+        public List<TaskInfo> GetRunningTasks() => _runningTasks.Values.ToList();
 
         /// <summary>
         /// 获取队列中的任务列表。
@@ -231,23 +237,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 是否存在空闲队列，即：队列是否已满，是否可加入新的任务
         /// </summary>
-        public bool IsIdleQueue
-        {
-            get
-            {
-                if (_queueTasks.Count <= 0)
-                {
-                    return true;
-                }
-
-                if (Account.MaxQueueSize <= 0)
-                {
-                    return true;
-                }
-
-                return _queueTasks.Count < Account.MaxQueueSize;
-            }
-        }
+        public bool IsIdleQueue => Account.QueueSize <= 0 || _queueTasks.Count < Account.QueueSize;
 
         /// <summary>
         /// 后台服务执行任务
@@ -264,56 +254,36 @@ namespace Midjourney.Infrastructure.LoadBalancer
                         break;
                     }
                 }
-                catch
-                {
-
-                }
+                catch { }
 
                 try
                 {
-                    //if (_longToken.Token.IsCancellationRequested)
-                    //{
-                    //    // 清理资源（如果需要）
-                    //    break;
-                    //}
-
-                    // 等待信号通知
-                    _mre.WaitOne();
+                    // 如果队列中没有任务，则等待信号通知
+                    if (_queueTasks.Count <= 0)
+                    {
+                        _mre.WaitOne();
+                    }
 
                     // 判断是否还有资源可用
                     while (!_semaphoreSlimLock.IsLockAvailable())
                     {
-                        //if (_longToken.Token.IsCancellationRequested)
-                        //{
-                        //    // 清理资源（如果需要）
-                        //    break;
-                        //}
-
                         // 等待
                         Thread.Sleep(100);
                     }
 
-                    //// 允许同时执行 N 个信号量的任务
-                    //while (_queueTasks.TryDequeue(out var info))
-                    //{
-                    //    // 判断是否还有资源可用
-                    //    while (!_semaphoreSlimLock.TryWait(100))
-                    //    {
-                    //        // 等待
-                    //        Thread.Sleep(100);
-                    //    }
+                    // 如果并发数修改，判断信号最大值是否为 Account.CoreSize
+                    while (_semaphoreSlimLock.MaxParallelism != Account.CoreSize)
+                    {
+                        // 重新设置信号量
+                        var oldMax = _semaphoreSlimLock.MaxParallelism;
+                        var newMax = Math.Max(1, Math.Min(Account.CoreSize, 12));
+                        if (_semaphoreSlimLock.SetMaxParallelism(newMax))
+                        {
+                            _logger.Information("频道 {@0} 信号量最大值修改成功，原值：{@1}，当前最大值：{@2}", Account.ChannelId, oldMax, newMax);
+                        }
 
-                    //    _taskFutureMap[info.Item1.Id] = ExecuteTaskAsync(info.Item1, info.Item2);
-                    //}
-
-                    // 允许同时执行 N 个信号量的任务
-                    //while (true)
-                    //{
-                    //if (_longToken.Token.IsCancellationRequested)
-                    //{
-                    //    // 清理资源（如果需要）
-                    //    break;
-                    //}
+                        Thread.Sleep(500);
+                    }
 
                     while (_queueTasks.TryPeek(out var info))
                     {
@@ -384,24 +354,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
                             Thread.Sleep(100);
                         }
                     }
-
-                    //else
-                    //{
-                    //    // 队列为空，退出循环
-                    //    break;
-                    //}
-                    //}
-
-                    //if (_longToken.Token.IsCancellationRequested)
-                    //{
-                    //    // 清理资源（如果需要）
-                    //    break;
-                    //}
-
-                    //// 等待
-                    //Thread.Sleep(100);
-
-
 
                     // 重新设置信号
                     _mre.Reset();
@@ -505,7 +457,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             // 在任务提交时，前面的的任务数量
             var currentWaitNumbers = _queueTasks.Count;
-            if (Account.MaxQueueSize > 0 && currentWaitNumbers >= Account.MaxQueueSize)
+            if (Account.QueueSize > 0 && currentWaitNumbers >= Account.QueueSize)
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试")
                     .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, ChannelId);
@@ -520,15 +472,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                 // 通知后台服务有新的任务
                 _mre.Set();
-
-                //// 当执行中的任务没有满时，重新计算队列中的任务数量
-                //if (_runningTasks.Count < _account.CoreSize)
-                //{
-                //    // 等待 10ms 检查
-                //    Thread.Sleep(10);
-                //}
-
-                //currentWaitNumbers = _queueTasks.Count;
 
                 if (currentWaitNumbers == 0)
                 {
@@ -565,45 +508,32 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 await _semaphoreSlimLock.LockAsync();
 
-                _runningTasks.Add(info);
+                _runningTasks.TryAdd(info.Id, info);
+
+                // 判断当前实例是否可用，尝试最大等待 30s
+                var waitTime = 0;
+                while (!IsAlive)
+                {
+                    // 等待 1s
+                    await Task.Delay(1000);
+
+                    // 计算等待时间
+                    waitTime += 1000;
+                    if (waitTime > 30 * 1000)
+                    {
+                        break;
+                    }
+                }
 
                 // 判断当前实例是否可用
                 if (!IsAlive)
                 {
+                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
+
                     info.Fail("实例不可用");
                     SaveAndNotify(info);
-                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
                     return;
                 }
-
-                // banned 判断
-                // banned 会导致执行中的数量计算不准确问题，暂时不处理
-                //if (!info.IsWhite)
-                //{
-                //    if (!string.IsNullOrWhiteSpace(info.UserId))
-                //    {
-                //        var lockKey = $"banned:lock:{info.UserId}";
-                //        if (_cache.TryGetValue(lockKey, out int lockValue) && lockValue > 0)
-                //        {
-                //            info.Fail("账号已被临时封锁，请勿使用违规词作图");
-                //            SaveAndNotify(info);
-                //            _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
-                //            return;
-                //        }
-                //    }
-
-                //    if (true)
-                //    {
-                //        var lockKey = $"banned:lock:{info.ClientIp}";
-                //        if (_cache.TryGetValue(lockKey, out int lockValue) && lockValue > 0)
-                //        {
-                //            info.Fail("账号已被临时封锁，请勿使用违规词作图");
-                //            SaveAndNotify(info);
-                //            _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
-                //            return;
-                //        }
-                //    }
-                //}
 
                 info.Status = TaskStatus.SUBMITTED;
                 info.Progress = "0%";
@@ -614,9 +544,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 // 判断当前实例是否可用
                 if (!IsAlive)
                 {
+                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
+
                     info.Fail("实例不可用");
                     SaveAndNotify(info);
-                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
                     return;
                 }
 
@@ -624,9 +555,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                 if (result.Code != ReturnCode.SUCCESS)
                 {
+                    _logger.Debug("[{@0}] task finished, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
+
                     info.Fail(result.Description);
                     SaveAndNotify(info);
-                    _logger.Debug("[{@0}] task finished, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
                     return;
                 }
 
@@ -657,11 +589,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     }
                 }
 
-                // 不随机，直接读消息
                 // 任务完成后，自动读消息
-                // 随机 3 次，如果命中则读消息
-                //if (new Random().Next(0, 3) == 0)
-                //{
                 try
                 {
                     // 成功才都消息
@@ -682,22 +610,22 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 {
                     _logger.Error(ex, "自动读消息异常 {@0} - {@1}", info.InstanceId, info.Id);
                 }
-                //}
-
-                SaveAndNotify(info);
 
                 _logger.Debug("[{AccountDisplay}] task finished, id: {TaskId}, status: {TaskStatus}", Account.GetDisplay(), info.Id, info.Status);
+
+                SaveAndNotify(info);
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "[{AccountDisplay}] task execute error, id: {TaskId}", Account.GetDisplay(), info.Id);
+
                 info.Fail("[Internal Server Error] " + ex.Message);
 
                 SaveAndNotify(info);
             }
             finally
             {
-                _runningTasks.Remove(info);
+                _runningTasks.TryRemove(info.Id, out _);
                 _taskFutureMap.TryRemove(info.Id, out _);
 
                 _semaphoreSlimLock.Unlock();
@@ -722,12 +650,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
         public void AddRunningTask(TaskInfo task)
         {
-            _runningTasks.Add(task);
+            _runningTasks.TryAdd(task.Id, task);
         }
 
         public void RemoveRunningTask(TaskInfo task)
         {
-            _runningTasks.Remove(task);
+            _runningTasks.TryRemove(task.Id, out _);
         }
 
         /// <summary>
@@ -844,7 +772,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 // 释放未完成的任务
                 foreach (var runningTask in _runningTasks)
                 {
-                    runningTask.Fail("强制取消"); // 取消任务（假设TaskInfo有Cancel方法）
+                    runningTask.Value.Fail("强制取消"); // 取消任务（假设TaskInfo有Cancel方法）
                 }
 
                 // 清理任务队列
@@ -854,7 +782,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 }
 
                 // 释放信号量
-                //_semaphoreSlimLock?.Dispose();
+                _semaphoreSlimLock?.Dispose();
 
                 // 释放信号
                 _mre?.Dispose();
@@ -883,7 +811,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
             }
         }
-
 
         /// <summary>
         /// 绘画
@@ -1596,7 +1523,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
             var json = botType == EBotType.MID_JOURNEY || prompt.Contains("--niji") ? _paramsMap["shorten"] : _paramsMap["shortenniji"];
             var paramsStr = ReplaceInteractionParams(json, nonce);
 
-
             var obj = JObject.Parse(paramsStr);
             obj["data"]["options"][0]["value"] = prompt;
             paramsStr = obj.ToString();
@@ -1670,7 +1596,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 str = str.Replace("$application_id", Constants.NIJI_APPLICATION_ID);
             }
-
 
             return str;
         }
