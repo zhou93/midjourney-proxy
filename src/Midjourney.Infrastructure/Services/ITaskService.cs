@@ -24,6 +24,7 @@
 
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.Util;
+using System.Threading.Tasks;
 
 namespace Midjourney.Infrastructure.Services
 {

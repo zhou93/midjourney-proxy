@@ -48,5 +48,11 @@ namespace Midjourney.Infrastructure.Dto
         /// </summary>
         [SwaggerSchema("图片base64", Description = "data:image/png;base64,xxx")]
         public string MaskBase64 { get; set; }
+        
+        /// <summary>
+        /// 是否以Remix模式执行任务
+        /// </summary>
+        [SwaggerSchema("Remix模式", Description = "true/false")]
+        public bool? Remix { get; set; }
     }
 }

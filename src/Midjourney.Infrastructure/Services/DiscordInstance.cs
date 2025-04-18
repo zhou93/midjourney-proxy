@@ -333,6 +333,21 @@ namespace Midjourney.Infrastructure.LoadBalancer
                             // 从队列中移除任务，并开始执行
                             if (_queueTasks.TryDequeue(out info))
                             {
+                                // 如果任务需要Remix模式，在随机等待时间后、执行任务前开启
+                                var task = info.Item1;
+                                if (task.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false))
+                                {
+                                    try 
+                                    {
+                                        // 在随机等待后开启Remix模式
+                                        var toggleResult = ToggleRemixModeAsync(true, task.RealBotType ?? task.BotType).GetAwaiter().GetResult();
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.Error(ex, $"在随机等待后开启Remix模式失败，TaskId: {task.Id}");
+                                    }
+                                }
+                                
                                 _taskFutureMap[info.Item1.Id] = ExecuteTaskAsync(info.Item1, info.Item2);
 
                                 // 计算执行后的间隔
@@ -686,6 +701,20 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 _taskFutureMap.TryRemove(info.Id, out _);
 
                 _semaphoreSlimLock.Unlock();
+
+                // 检查任务是否开启了Remix模式，如果开启了则关闭
+                if (info.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false))
+                {
+                    try
+                    {
+                        // 任务执行完毕后关闭Remix模式
+                        _ = ToggleRemixModeAsync(false, info.RealBotType ?? info.BotType);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error(ex, $"关闭Remix模式异常，TaskId: {info.Id}");
+                    }
+                }
 
                 SaveAndNotify(info);
             }
@@ -2059,6 +2088,116 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                     return false;
                 });
+            }
+        }
+
+        /// <summary>
+        /// 切换Remix模式
+        /// </summary>
+        /// <param name="enable">是否开启Remix模式</param>
+        /// <param name="botType">机器人类型</param>
+        /// <returns>操作结果</returns>
+        public async Task<bool> ToggleRemixModeAsync(bool enable, EBotType botType = EBotType.MID_JOURNEY)
+        {
+            try
+            {
+                string nonce = SnowFlake.NextId();
+                
+                _logger.Information($"切换Remix模式开始，目标状态：{(enable ? "开启" : "关闭")}，Bot类型：{botType}，账号ID：{Account.Id}");
+                
+                // 获取当前Remix状态
+                bool isCurrentlyOn = botType == EBotType.MID_JOURNEY 
+                    ? Account.MjRemixOn 
+                    : Account.NijiRemixOn;
+                
+                _logger.Information($"当前Remix状态：{(isCurrentlyOn ? "开启" : "关闭")}");
+                
+                // 如果当前状态已经是目标状态，则不需要切换
+                if (isCurrentlyOn == enable)
+                {
+                    _logger.Information("当前状态已经是目标状态，无需切换");
+                    return true;
+                }
+                
+                // 查找Remix按钮的customId
+                string customId = null;
+                
+                if (botType == EBotType.MID_JOURNEY)
+                {
+                    var remixButton = Account.Buttons.FirstOrDefault(x => x.Label == "Remix mode");
+                    if (remixButton != null)
+                    {
+                        customId = remixButton.CustomId;
+                        _logger.Information($"找到MJ Remix按钮，CustomId: {customId}, 按钮样式: {remixButton.Style}");
+                    }
+                }
+                else
+                {
+                    var remixButton = Account.NijiButtons.FirstOrDefault(x => x.Label == "Remix mode");
+                    if (remixButton != null)
+                    {
+                        customId = remixButton.CustomId;
+                        _logger.Information($"找到Niji Remix按钮，CustomId: {customId}, 按钮样式: {remixButton.Style}");
+                    }
+                }
+                
+                if (string.IsNullOrEmpty(customId))
+                {
+                    _logger.Warning("未找到Remix mode按钮");
+                    return false;
+                }
+                
+                // 发送切换Remix模式的请求
+                var result = await SettingButtonAsync(nonce, customId, botType);
+                _logger.Information($"切换Remix模式请求结果：{result.Code}, {result.Description}");
+                
+                if (result.Code != ReturnCode.SUCCESS)
+                {
+                    _logger.Warning($"切换Remix模式请求失败: {result.Description}");
+                    return false;
+                }
+                
+                // 等待200ms，让Discord服务器处理请求
+                await Task.Delay(200);
+                
+                // 验证Remix模式是否切换成功
+                if (botType == EBotType.MID_JOURNEY)
+                {
+                    var button = Account.Buttons.FirstOrDefault(x => x.Label == "Remix mode");
+                    if (button != null)
+                    {
+                        bool isOn = button.Style == 3; // Style 3 表示按钮被激活
+                        _logger.Information($"验证结果：MJ Remix模式当前状态为 {(isOn ? "开启" : "关闭")}，目标状态为 {(enable ? "开启" : "关闭")}");
+                        
+                        // 如果状态不匹配，记录警告但仍然返回成功
+                        if (isOn != enable)
+                        {
+                            _logger.Warning($"MJ Remix模式状态与目标状态不匹配，当前: {isOn}, 目标: {enable}");
+                        }
+                    }
+                }
+                else
+                {
+                    var button = Account.NijiButtons.FirstOrDefault(x => x.Label == "Remix mode");
+                    if (button != null)
+                    {
+                        bool isOn = button.Style == 3;
+                        _logger.Information($"验证结果：Niji Remix模式当前状态为 {(isOn ? "开启" : "关闭")}，目标状态为 {(enable ? "开启" : "关闭")}");
+                        
+                        // 如果状态不匹配，记录警告但仍然返回成功
+                        if (isOn != enable)
+                        {
+                            _logger.Warning($"Niji Remix模式状态与目标状态不匹配，当前: {isOn}, 目标: {enable}");
+                        }
+                    }
+                }
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "切换Remix模式失败");
+                return false;
             }
         }
     }

@@ -34,6 +34,7 @@ using Serilog;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace Midjourney.Infrastructure.Services
 {
@@ -508,6 +509,44 @@ namespace Midjourney.Infrastructure.Services
                 task.PromptEn = targetTask.PromptEn;
             }
 
+            Log.Information($"开始处理Remix任务，TaskId: {task.Id}, CustomId: {submitAction.CustomId}, AccountFilter: {(task.AccountFilter != null ? Newtonsoft.Json.JsonConvert.SerializeObject(task.AccountFilter) : "null")}");
+            // 如果任务的AccountFilter中指定了remix=true，则设置为Remix模式
+            if (task.AccountFilter?.Remix == true)
+            {
+                // 设置任务的Remix相关属性
+                task.SetProperty(Constants.TASK_PROPERTY_REMIX, true);
+                
+                // 添加日志记录AccountFilter信息
+                Log.Information($"设置Remix模式，TaskId: {task.Id}, AccountFilter.Remix值: {task.AccountFilter?.Remix}");
+                
+                // 不立即开启Remix模式，只设置标记，等待modal阶段再开启
+                
+                // 对于需要打开模态对话框的操作，强制打开模态对话框
+                if (submitAction.CustomId.StartsWith("MJ::JOB::variation::") ||
+                    submitAction.CustomId.StartsWith("MJ::JOB::high_variation::") ||
+                    submitAction.CustomId.StartsWith("MJ::JOB::low_variation::") ||
+                    submitAction.CustomId.StartsWith("MJ::JOB::reroll") ||
+                    submitAction.CustomId.StartsWith("MJ::JOB::pan"))
+                {
+                    // 将这些任务设置为需要模态交互，而不是自动提交
+                    task.RemixAutoSubmit = false;
+                    task.Status = TaskStatus.MODAL; // 明确设置为MODAL状态
+                    Log.Information($"设置任务为MODAL状态，TaskId: {task.Id}, CustomId: {submitAction.CustomId}");
+                    
+                    // 保存任务状态到数据库
+                    _taskStoreService.Save(task);
+                    
+                    // 返回EXISTED状态，通知前端等待弹窗
+                    string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
+                    var result = SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
+                        .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
+                        .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
+                    
+                    Log.Information($"返回弹窗等待状态，TaskId: {task.Id}, ReturnCode: {result.Code}");
+                    return result;
+                }
+            }
+
             // 点击喜欢
             if (submitAction.CustomId.Contains("MJ::BOOKMARK"))
             {
@@ -726,27 +765,6 @@ namespace Midjourney.Infrastructure.Services
                         });
                     }
                 }
-                else
-                {
-                    // 未开启 remix 自动提交
-                    // 并且已开启 remix 模式
-                    if (((task.RealBotType ?? task.BotType) == EBotType.MID_JOURNEY && discordInstance.Account.MjRemixOn)
-                        || (task.BotType == EBotType.NIJI_JOURNEY && discordInstance.Account.NijiRemixOn))
-                    {
-                        // 如果是 REMIX 任务，则设置任务状态为 modal
-                        task.Status = TaskStatus.MODAL;
-                        task.SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn);
-                        task.SetProperty(Constants.TASK_PROPERTY_REMIX, true);
-                        _taskStoreService.Save(task);
-
-                        // 状态码为 21
-                        // 如果task.PromptEn为空，则使用targetTask.PromptEn
-                        string finalPrompt = !string.IsNullOrEmpty(task.PromptEn) ? task.PromptEn : targetTask.PromptEn;
-                        return SubmitResultVO.Of(ReturnCode.EXISTED, "Waiting for window confirm", task.Id)
-                            .SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, finalPrompt)
-                            .SetProperty(Constants.TASK_PROPERTY_REMIX, true);
-                    }
-                }
             }
 
             return discordInstance.SubmitTaskAsync(task, async () =>
@@ -803,6 +821,27 @@ namespace Midjourney.Infrastructure.Services
 
             task.InstanceId = discordInstance.ChannelId;
             task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
+            
+            // 添加日志记录任务信息
+            Log.Information($"[SubmitModal] 开始处理模态任务，TaskId: {task.Id}");
+            
+            // 如果提交的模态对话框参数中指定了remix，则更新任务的Remix相关属性
+            if (submitAction.Remix.HasValue)
+            {
+                task.SetProperty(Constants.TASK_PROPERTY_REMIX, submitAction.Remix.Value);
+                
+                // 如果需要以Remix模式执行，设置为不自动提交，以便能够进行用户交互
+                if (submitAction.Remix.Value)
+                {
+                    task.RemixAutoSubmit = false;
+                }
+            }
+            
+            // 如果是通过modal接口提交的，使用提交的prompt更新任务
+            if (!string.IsNullOrEmpty(submitAction.Prompt))
+            {
+                task.PromptEn = submitAction.Prompt;
+            }
 
             return discordInstance.SubmitTaskAsync(task, async () =>
             {
@@ -811,13 +850,85 @@ namespace Midjourney.Infrastructure.Services
                 var messageId = task.GetProperty<string>(Constants.TASK_PROPERTY_MESSAGE_ID, default);
                 var nonce = task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default);
 
+                Log.Information($"[SubmitModal] 准备弹窗确认，TaskId: {task.Id}, CustomId: {customId}, MessageId: {messageId}, Remix模式: {task.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false)}");
+                
+                // 检查消息ID是否为空
+                if (string.IsNullOrWhiteSpace(messageId))
+                {
+                    // 尝试从父任务获取消息ID
+                    if (!string.IsNullOrWhiteSpace(task.ParentId))
+                    {
+                        var parentTask = _taskStoreService.Get(task.ParentId);
+                        if (parentTask != null)
+                        {
+                            messageId = parentTask.MessageId;
+                            Log.Information($"[SubmitModal] 使用父任务的MessageId: {messageId}，TaskId: {task.Id}");
+                        }
+                    }
+                    
+                    // 如果仍然为空，则使用任务ID作为消息ID（仅作为临时解决方案）
+                    if (string.IsNullOrWhiteSpace(messageId))
+                    {
+                        messageId = task.Id;
+                        Log.Warning($"[SubmitModal] MessageId为空，使用TaskId作为替代: {messageId}");
+                    }
+                    
+                    // 更新任务的MessageId
+                    task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_ID, messageId);
+                }
+                
                 // 弹窗确认
                 task = discordInstance.GetRunningTask(task.Id);
                 task.RemixModaling = true;
-                var res = await discordInstance.ActionAsync(messageId, customId, messageFlags, nonce, task);
-                if (res.Code != ReturnCode.SUCCESS)
+                
+                // 注意：移除了这里的Remix模式开启逻辑，统一在DiscordInstance.BackgroundWork中处理
+                if (task.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false))
                 {
-                    return res;
+                    // Remix模式已在BackgroundWork中处理
+                }
+                
+                // 检查是否为Remix模式，如果是且操作类型适合Remix，则先设置任务状态为MODAL并返回
+                // 注意：如果是通过modal接口提交的请求，说明用户已经确认了提交，不需要再等待弹窗确认
+                if (task.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false) && 
+                    (task.Action == TaskAction.VARIATION || task.Action == TaskAction.REROLL || task.Action == TaskAction.PAN) &&
+                    string.IsNullOrEmpty(submitAction.Prompt)) // 如果Prompt为空，说明不是modal提交
+                {
+                    Log.Information($"[SubmitModal] 检测到Remix模式，设置任务为MODAL状态并返回，TaskId: {task.Id}, Action: {task.Action}");
+                    
+                    // 设置任务状态为MODAL，保存并返回给前端
+                    task.Status = TaskStatus.MODAL;
+                    task.SetProperty(Constants.TASK_PROPERTY_FINAL_PROMPT, task.PromptEn);
+                    _taskStoreService.Save(task);
+                    
+                    // 返回EXISTED状态，通知前端等待弹窗
+                    return Message.Of(ReturnCode.EXISTED, "Waiting for window confirm");
+                }
+                else
+                {
+                    // 对非Remix模式或不适合Remix的操作类型使用ActionAsync
+                    var res = await discordInstance.ActionAsync(messageId, customId, messageFlags, nonce, task);
+                    if (res.Code != ReturnCode.SUCCESS)
+                    {
+                        Log.Warning($"[SubmitModal] ActionAsync调用失败，TaskId: {task.Id}, Code: {res.Code}, Description: {res.Description}");
+                        
+                        // 操作失败时，确保关闭Remix模式
+                        if (task.GetProperty<bool>(Constants.TASK_PROPERTY_REMIX, false))
+                        {
+                            try
+                            {
+                                await discordInstance.ToggleRemixModeAsync(false, task.RealBotType ?? task.BotType);
+                                Log.Information($"[SubmitModal] 操作失败后关闭Remix模式，TaskId: {task.Id}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, $"[SubmitModal] 关闭Remix模式失败，TaskId: {task.Id}");
+                            }
+                        }
+                        
+                        return res;
+                    }
+                    
+                    Log.Information($"[SubmitModal] ActionAsync调用成功，TaskId: {task.Id}, 开始等待RemixModalMessageId");
                 }
 
                 // 等待获取 messageId 和交互消息 id
@@ -832,13 +943,18 @@ namespace Midjourney.Infrastructure.Services
 
                     if (string.IsNullOrWhiteSpace(task.RemixModalMessageId) || string.IsNullOrWhiteSpace(task.InteractionMetadataId))
                     {
+                        Log.Information($"[SubmitModal] 等待MessageId中，已等待: {sw.ElapsedMilliseconds}ms, RemixModalMessageId: {task.RemixModalMessageId}, InteractionMetadataId: {task.InteractionMetadataId}");
+                        
                         if (sw.ElapsedMilliseconds > 300000)
                         {
+                            Log.Warning($"[SubmitModal] 等待MessageId超时，TaskId: {task.Id}");
                             return Message.Of(ReturnCode.NOT_FOUND, "超时，未找到消息 ID");
                         }
                     }
                 } while (string.IsNullOrWhiteSpace(task.RemixModalMessageId) || string.IsNullOrWhiteSpace(task.InteractionMetadataId));
 
+                Log.Information($"[SubmitModal] 已获取RemixModalMessageId: {task.RemixModalMessageId}, InteractionMetadataId: {task.InteractionMetadataId}");
+                
                 // 等待 1.2s
                 Thread.Sleep(1200);
 
@@ -1465,7 +1581,7 @@ namespace Midjourney.Infrastructure.Services
         }
 
         /// <summary>
-        /// 获取分页数据
+        /// 获取页面数据
         /// </summary>
         /// <param name="dto"></param>
         /// <param name="path"></param>

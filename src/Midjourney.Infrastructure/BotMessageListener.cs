@@ -1283,8 +1283,7 @@ namespace Midjourney.Infrastructure
                                     }
 
                                     // 如果任务是 remix 自动提交任务
-                                    if (task.RemixAutoSubmit
-                                        && task.RemixModaling == true
+                                    if (task.RemixModaling == true
                                         && messageType == MessageType.INTERACTION_SUCCESS)
                                     {
                                         task.RemixModalMessageId = id;

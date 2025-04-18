@@ -552,6 +552,9 @@ namespace Midjourney.API.Controllers
             task.RealBotType = targetTask.RealBotType;
             task.SubInstanceId = targetTask.SubInstanceId;
 
+            // 处理AccountFilter
+            NewTaskDoFilter(task, actionDTO.AccountFilter);
+
             // 识别 mj action
 
             // 放大

@@ -103,32 +103,9 @@ namespace Midjourney.Infrastructure.LoadBalancer
                         return null;
                     }
 
-                    // 如果过滤 remix = true, 但是账号未开启 remix 或 remix 开启了自动提交，则不符合条件
-                    if (accountFilter.Remix == true && (model.Account.MjRemixOn != true || model.Account.RemixAutoSubmit))
-                    {
-                        return null;
-                    }
-
-                    // 如果过滤 remix = false, 但是账号开启了 remix 且 remix 未开启自动提交，则不符合条件
-                    if (accountFilter.Remix == false && model.Account.MjRemixOn == true && !model.Account.RemixAutoSubmit)
-                    {
-                        return null;
-                    }
-
-                    // 如果过滤 niji remix = true, 但是账号未开启 niji remix 或 niji remix 开启了自动提交，则不符合条件
-                    if (accountFilter.NijiRemix == true && (model.Account.NijiRemixOn != true || model.Account.RemixAutoSubmit))
-                    {
-                        return null;
-                    }
-
-                    // 如果过滤 niji remix = false, 但是账号开启了 niji remix 且 niji remix 未开启自动提交，则不符合条件
-                    if (accountFilter.NijiRemix == false && model.Account.NijiRemixOn == true && !model.Account.RemixAutoSubmit)
-                    {
-                        return null;
-                    }
-
-                    // 如果过滤 remix 自动提交，则不符合条件
-                    if (accountFilter.RemixAutoConsidered.HasValue && model.Account.RemixAutoSubmit != accountFilter.RemixAutoConsidered)
+                    // 不再根据账号的Remix状态进行筛选，只检查RemixAutoSubmit
+                    // 如果要求以Remix模式执行任务(remix=true)，则排除自动提交的账号，确保可以打开模态对话框
+                    if (accountFilter.Remix == true && model.Account.RemixAutoSubmit)
                     {
                         return null;
                     }
@@ -197,16 +174,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     accountFilter?.Modes.Contains(GenerationSpeedMode.TURBO) == true,
                     c => c.Account.FastExhausted == false)
 
-                    // Midjourney Remix 过滤
-                    .WhereIf(accountFilter?.Remix == true, c => c.Account.MjRemixOn == accountFilter.Remix || !c.Account.RemixAutoSubmit)
-                    .WhereIf(accountFilter?.Remix == false, c => c.Account.MjRemixOn == accountFilter.Remix)
-
-                    // Niji Remix 过滤
-                    .WhereIf(accountFilter?.NijiRemix == true, c => c.Account.NijiRemixOn == accountFilter.NijiRemix || !c.Account.RemixAutoSubmit)
-                    .WhereIf(accountFilter?.NijiRemix == false, c => c.Account.NijiRemixOn == accountFilter.NijiRemix)
-
-                    // Remix 自动提交过滤
-                    .WhereIf(accountFilter?.RemixAutoConsidered.HasValue == true, c => c.Account.RemixAutoSubmit == accountFilter.RemixAutoConsidered)
+                    // Remix筛选：只根据RemixAutoSubmit筛选，不再根据账号当前状态筛选
+                    .WhereIf(accountFilter?.Remix == true, c => !c.Account.RemixAutoSubmit)
+                    
+                    // 使用原有的RemixAutoConsidered(仅当未设置remix时)
+                    .WhereIf(accountFilter?.Remix == null && accountFilter?.RemixAutoConsidered.HasValue == true, c => c.Account.RemixAutoSubmit == accountFilter.RemixAutoConsidered)
 
                     // 过滤只接收新任务的实例
                     .WhereIf(isNewTask == true, c => c.Account.IsAcceptNewTask == true)

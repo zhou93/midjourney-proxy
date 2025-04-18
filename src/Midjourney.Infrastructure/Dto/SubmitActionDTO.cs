@@ -22,6 +22,7 @@
 // invasion of privacy, or any other unlawful purposes is strictly prohibited. 
 // Violation of these terms may result in termination of the license and may subject the violator to legal action.
 using Swashbuckle.AspNetCore.Annotations;
+using System.Text.Json.Serialization;
 
 namespace Midjourney.Infrastructure.Dto
 {
@@ -42,5 +43,12 @@ namespace Midjourney.Infrastructure.Dto
         /// </summary>
         [SwaggerSchema("MJ::JOB::upsample::2::3dbbd469-36af-4a0f-8f02-df6c579e7011")]
         public string CustomId { get; set; }
+        
+        /// <summary>
+        /// 账号筛选条件
+        /// </summary>
+        [SwaggerSchema("账号筛选条件")]
+        [JsonPropertyName("accountFilter")]
+        public AccountFilter AccountFilter { get; set; }
     }
 }
