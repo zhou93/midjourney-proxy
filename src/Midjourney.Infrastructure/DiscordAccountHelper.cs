@@ -285,6 +285,8 @@ namespace Midjourney.Infrastructure
             var client = new RestClient();
             var request = new RestRequest(notifyUrl, Method.Post);
             request.AddHeader("Content-Type", "application/json");
+            // 打印 model内容
+            Log.Information($"自动登录 model: {JsonSerializer.Serialize(model)}");
             var body = new AutoLoginRequest
             {
                 Login2fa = model.Login2fa,
@@ -297,10 +299,16 @@ namespace Midjourney.Infrastructure
             };
             var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
             request.AddJsonBody(json);
+            // 打印request body
+            Log.Information($"自动登录 request body: {json}");
+            Log.Information($"自动登录 request {request}");
             var response = client.Execute(request);
 
+            // 打印 response状态码
+            Log.Information($"自动登录 response状态码: {response.StatusCode}");
             if (response.StatusCode == HttpStatusCode.OK)
             {
+                Log.Information($"自动登录成功");
                 model.IsAutoLogining = true;
                 model.LoginStart = DateTime.Now;
 
