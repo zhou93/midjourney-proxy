@@ -39,6 +39,9 @@ using Midjourney.Infrastructure.Storage;
 using MongoDB.Driver;
 using Serilog;
 
+// 使用别名解决命名空间冲突
+using SystemTextJson = System.Text.Json;
+
 namespace Midjourney.API.Controllers
 {
     /// <summary>
@@ -552,70 +555,118 @@ namespace Midjourney.API.Controllers
         [HttpPost("account-login-notify")]
         public ActionResult AccountLoginNotify([FromBody] AutoLoginRequest request)
         {
+            Log.Information("收到自动登录回调请求: {@Request}", request);
+            
             if (!string.IsNullOrWhiteSpace(request.State) && !string.IsNullOrWhiteSpace(request.LoginAccount))
             {
+                Log.Information("开始查询账号信息, State: {State}, LoginAccount: {LoginAccount}", request.State, request.LoginAccount);
                 var item = DbHelper.Instance.AccountStore.Single(c => c.ChannelId == request.State && c.LoginAccount == request.LoginAccount);
 
                 if (item != null && item.IsAutoLogining == true)
                 {
+                    Log.Information("找到正在自动登录的账号: {ChannelId}, IsAutoLogining: {IsAutoLogining}", item.ChannelId, item.IsAutoLogining);
+                    Log.Information("自动登录账号详情: {@Item}", item);
+                    
                     var secret = GlobalConfiguration.Setting.CaptchaNotifySecret;
+                    Log.Information("验证密钥, 配置密钥是否为空: {IsEmpty}", string.IsNullOrWhiteSpace(secret));
+                    
                     if (string.IsNullOrWhiteSpace(secret) || secret == request.Secret)
                     {
+                        Log.Information("密钥验证通过");
                         // 10 分钟之内有效
                         if (item.LoginStart != null && (DateTime.Now - item.LoginStart.Value).TotalMinutes > 10)
                         {
+                            Log.Warning("登录超时检测: 当前时间与登录开始时间相差: {Minutes}分钟", (DateTime.Now - item.LoginStart.Value).TotalMinutes);
                             if (request.Success)
                             {
                                 request.Success = false;
                                 request.Message = "登录超时，超过 10 分钟";
+                                Log.Warning("登录成功但已超时，将状态修改为失败");
                             }
 
-                            Log.Warning("登录超时，超过 10 分钟 {@0}, time: {@1}", request, item.LoginStart);
+                            Log.Warning("登录超时，超过 10 分钟 {@Request}, 登录开始时间: {@LoginStart}", request, item.LoginStart);
                         }
 
                         if (request.Success && !string.IsNullOrWhiteSpace(request.Token))
                         {
+                            Log.Information("登录成功，开始更新账号信息");
                             item.IsAutoLogining = false;
                             item.LoginStart = null;
                             item.LoginEnd = null;
                             item.LoginMessage = request.Message;
                             item.UserToken = request.Token;
 
-                            // 如果登录成功，且登录前是启用状态，则更新为启用状态
-                            if (item.Enable != true && request.LoginBeforeEnabled)
+                            // 登录成功后自动启用账号
+                            if (item.Enable != true)
                             {
-                                item.Enable = request.LoginBeforeEnabled;
+                                Log.Information("登录成功，自动启用账号");
+                                item.Enable = true;
                             }
                         }
                         else
                         {
                             // 更新失败原因
+                            Log.Warning("登录失败，更新失败原因: {Message}", request.Message);
                             item.LoginMessage = request.Message;
                         }
 
                         // 更新账号信息
+                        Log.Information("更新账号信息到数据库");
                         DbHelper.Instance.AccountStore.Update(item);
 
                         // 清空缓存
+                        Log.Information("开始清理账号缓存, ChannelId: {ChannelId}", item.ChannelId);
                         var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
-                        inc?.ClearAccountCache(item.Id);
+                        if (inc != null)
+                        {
+                            Log.Information("找到Discord实例，清理缓存, AccountId: {AccountId}", item.Id);
+                            inc.ClearAccountCache(item.Id);
+                        }
+                        else
+                        {
+                            Log.Warning("未找到Discord实例，无法清理缓存, ChannelId: {ChannelId}", item.ChannelId);
+                        }
 
                         if (!request.Success)
                         {
                             // 发送邮件
+                            Log.Information("登录失败，准备发送邮件通知");
                             EmailJob.Instance.EmailSend(_properties.Smtp, $"自动登录失败-{item.ChannelId}", $"自动登录失败-{item.ChannelId}, {request.Message}, 请手动登录");
+                            Log.Information("邮件发送请求已提交");
                         }
                     }
                     else
                     {
                         // 签名错误
-                        Log.Warning("自动登录回调签名验证失败 {@0}", request);
+                        Log.Warning("自动登录回调签名验证失败, 请求: {@Request}, 配置密钥: {ConfigSecret}, 请求密钥: {RequestSecret}", 
+                            request, 
+                            string.IsNullOrEmpty(secret) ? "空" : "已设置(不显示)", 
+                            string.IsNullOrEmpty(request.Secret) ? "空" : "已设置(不显示)");
 
                         return Ok();
                     }
                 }
+                else
+                {
+                    if (item == null)
+                    {
+                        Log.Warning("未找到匹配的账号, State: {State}, LoginAccount: {LoginAccount}", request.State, request.LoginAccount);
+                    }
+                    else
+                    {
+                        Log.Warning("找到账号但不在自动登录状态, ChannelId: {ChannelId}, IsAutoLogining: {IsAutoLogining}", 
+                            item.ChannelId, item.IsAutoLogining);
+                    }
+                }
+            }
+            else
+            {
+                Log.Warning("请求参数不完整, State: {State}, LoginAccount: {LoginAccount}", 
+                    request.State ?? "空", 
+                    request.LoginAccount ?? "空");
             }
 
+            Log.Information("自动登录回调处理完成");
             return Ok();
         }
 
@@ -669,7 +720,7 @@ namespace Midjourney.API.Controllers
                 if (!string.IsNullOrWhiteSpace(con))
                 {
                     // 解析
-                    var json = System.Text.Json.JsonSerializer.Deserialize<JsonElement>(con);
+                    var json = SystemTextJson.JsonSerializer.Deserialize<JsonElement>(con);
                     if (json.TryGetProperty("hash", out var h) && json.TryGetProperty("token", out var to))
                     {
                         var hashStr = h.GetString();
