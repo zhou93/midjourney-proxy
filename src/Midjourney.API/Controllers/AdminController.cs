@@ -604,6 +604,7 @@ namespace Midjourney.API.Controllers
                             item.LoginEnd = null;
                             item.LoginMessage = request.Message;
                             item.UserToken = request.Token;
+                            item.DisabledReason = null; // 清除禁用原因，确保服务可用
 
                             // 登录成功后自动启用账号
                             if (item.Enable != true)
@@ -634,27 +635,6 @@ namespace Midjourney.API.Controllers
                         else
                         {
                             Log.Warning("未找到Discord实例，无法清理缓存, ChannelId: {ChannelId}", item.ChannelId);
-                        }
-
-                        // 如果登录成功，重新初始化账号服务
-                        if (request.Success && !string.IsNullOrWhiteSpace(request.Token))
-                        {
-                            Log.Information("登录成功，开始重新初始化账号服务: {ChannelId}", item.ChannelId);
-                            // 异步重新启动账号服务
-                            _ = Task.Run(async () => 
-                            {
-                                try 
-                                {
-                                    // 延迟1秒等待数据库更新完成
-                                    await Task.Delay(1000);
-                                    await _discordAccountInitializer.StartCheckAccount(item);
-                                    Log.Information("账号服务初始化请求已发送: {ChannelId}", item.ChannelId);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Log.Error(ex, "重新初始化账号服务失败: {ChannelId}", item.ChannelId);
-                                }
-                            });
                         }
 
                         if (!request.Success)
