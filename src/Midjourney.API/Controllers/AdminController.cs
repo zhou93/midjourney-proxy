@@ -546,7 +546,8 @@ namespace Midjourney.API.Controllers
                 return Result.Fail("账号、密码、2FA 不能为空");
             }
 
-            var ok = DiscordAccountHelper.AutoLogin(model, model.Enable ?? false);
+            // var ok = DiscordAccountHelper.AutoLogin(model, model.Enable ?? false);
+            var ok = DiscordAccountHelper.AutoLogin(model, true);
             if (ok)
             {
                 return Result.Ok("登录请求已发送，请稍后刷新列表！");
@@ -604,13 +605,12 @@ namespace Midjourney.API.Controllers
                             item.LoginEnd = null;
                             item.LoginMessage = request.Message;
                             item.UserToken = request.Token;
-                            item.DisabledReason = null; // 清除禁用原因，确保服务可用
 
-                            // 登录成功后自动启用账号
-                            if (item.Enable != true)
+                            // 如果登录成功，且登录前是启用状态，则更新为启用状态
+                            if (item.Enable != true && request.LoginBeforeEnabled)
                             {
                                 Log.Information("登录成功，自动启用账号");
-                                item.Enable = true;
+                                item.Enable = request.LoginBeforeEnabled;
                             }
                         }
                         else
