@@ -2122,5 +2122,17 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 return false;
             }
         }
+
+        public (bool IsInit, bool AccountNotNull, bool AccountEnable, bool WebSocketManagerNotNull, bool WebSocketRunning, bool AccountNotLocked, bool IsAlive) GetAliveStatusDetail()
+        {
+            bool isInit = IsInit;
+            bool accountNotNull = Account != null;
+            bool accountEnable = Account != null && Account.Enable != null && Account.Enable == true;
+            bool wsManagerNotNull = WebSocketManager != null;
+            bool wsManagerRunning = WebSocketManager != null && WebSocketManager.Running == true;
+            bool accountNotLocked = Account != null && Account.Lock == false;
+            bool isAlive = isInit && accountNotNull && accountEnable && wsManagerNotNull && wsManagerRunning && accountNotLocked;
+            return (isInit, accountNotNull, accountEnable, wsManagerNotNull, wsManagerRunning, accountNotLocked, isAlive);
+        }
     }
 }

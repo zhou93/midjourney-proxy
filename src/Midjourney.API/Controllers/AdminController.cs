@@ -563,7 +563,7 @@ namespace Midjourney.API.Controllers
         /// <returns></returns>
         [AllowAnonymous]
         [HttpPost("account-login-notify")]
-        public ActionResult AccountLoginNotify([FromBody] AutoLoginRequest request)
+        public async Task<ActionResult> AccountLoginNotify([FromBody] AutoLoginRequest request)
         {
             Log.Information("收到自动登录回调请求: {@Request}", request);
             
@@ -639,8 +639,11 @@ namespace Midjourney.API.Controllers
 
                         if (request.Success && !string.IsNullOrWhiteSpace(request.Token))
                         {
-                            Log.Information("登录成功，开始同步初始化账号, ChannelId: {ChannelId}", item.ChannelId);
-                            _ = _discordAccountInitializer.StartCheckAccount(item, false);
+                            Log.Information("登录成功，开始重新连接账号, ChannelId: {ChannelId}", item.ChannelId);
+                            var account = DbHelper.Instance.AccountStore.Get(item.Id);
+                            // 使用重连方法确保完全刷新连接
+                            await _discordAccountInitializer.ReconnectAccount(account);
+                            Log.Information("账号重连完成, ChannelId: {ChannelId}", account.ChannelId);
                         }
 
                         if (!request.Success)
@@ -1116,6 +1119,12 @@ namespace Midjourney.API.Controllers
                 item.RunningCount = inc?.GetRunningFutures().Count ?? 0;
                 item.QueueCount = inc?.GetQueueTasks().Count ?? 0;
                 item.Running = inc?.IsAlive ?? false;
+                if (inc != null && !inc.IsAlive)
+                {
+                    var status = inc.GetAliveStatusDetail();
+                    Log.Information($"[打点] DiscordInstance不存活，ChannelId={inc.ChannelId}，详细状态：IsInit={status.IsInit}, AccountNotNull={status.AccountNotNull}, AccountEnable={status.AccountEnable}, WebSocketManagerNotNull={status.WebSocketManagerNotNull}, WebSocketRunning={status.WebSocketRunning}, AccountNotLocked={status.AccountNotLocked}");
+                }
+                
 
                 if (user == null || (user.Role != EUserRole.ADMIN && user.Id != item.SponsorUserId))
                 {
@@ -1315,6 +1324,11 @@ namespace Midjourney.API.Controllers
 
                 // 是否运行中
                 item.Running = inc?.IsAlive ?? false;
+                if (inc != null && !inc.IsAlive)
+                {
+                    var status = inc.GetAliveStatusDetail();
+                    Log.Information($"[打点] DiscordInstance不存活，ChannelId={inc.ChannelId}，详细状态：IsInit={status.IsInit}, AccountNotNull={status.AccountNotNull}, AccountEnable={status.AccountEnable}, WebSocketManagerNotNull={status.WebSocketManagerNotNull}, WebSocketRunning={status.WebSocketRunning}, AccountNotLocked={status.AccountNotLocked}");
+                }
 
                 if (user == null || (user.Role != EUserRole.ADMIN && user.Id != item.SponsorUserId))
                 {
