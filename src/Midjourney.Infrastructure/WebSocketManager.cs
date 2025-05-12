@@ -923,12 +923,11 @@ namespace Midjourney.Infrastructure
                 // 尝试自动登录
                 var sw = new Stopwatch();
                 var setting = GlobalConfiguration.Setting;
-                var info = new StringBuilder(); 
                 var account = Account;
                 if (setting.EnableAutoLogin)
                 {
                     sw.Stop();
-                    info.AppendLine($"{account.Id}尝试自动登录...");
+                    LogInfo($"{account.Id}尝试自动登录...");
                     sw.Restart();
 
                     try
@@ -939,13 +938,13 @@ namespace Midjourney.Infrastructure
                         if (suc)
                         {
                             sw.Stop();
-                            info.AppendLine($"{account.Id}自动登录请求成功...");
+                            LogInfo($"{account.Id}自动登录请求成功...");
                             sw.Restart();
                         }
                         else
                         {
                             sw.Stop();
-                            info.AppendLine($"{account.Id}自动登录请求失败...");
+                            LogInfo($"{account.Id}自动登录请求失败...");
                             sw.Restart();
                         }
                     }
@@ -954,7 +953,7 @@ namespace Midjourney.Infrastructure
                         _logger.Error(exa, "Account({@0}) auto login fail, disabled: {@1}", account.ChannelId, exa.Message);
 
                         sw.Stop();
-                        info.AppendLine($"{account.Id}自动登录请求异常...");
+                        LogInfo($"{account.Id}自动登录请求异常...");
                         sw.Restart();
                     }
                 }

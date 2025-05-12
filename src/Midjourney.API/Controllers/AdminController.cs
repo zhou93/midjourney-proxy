@@ -637,6 +637,12 @@ namespace Midjourney.API.Controllers
                             Log.Warning("未找到Discord实例，无法清理缓存, ChannelId: {ChannelId}", item.ChannelId);
                         }
 
+                        if (request.Success && !string.IsNullOrWhiteSpace(request.Token))
+                        {
+                            Log.Information("登录成功，开始同步初始化账号, ChannelId: {ChannelId}", item.ChannelId);
+                            _ = _discordAccountInitializer.StartCheckAccount(item, false);
+                        }
+
                         if (!request.Success)
                         {
                             // 发送邮件
